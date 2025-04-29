@@ -4,16 +4,17 @@ import React, { useMemo, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 
-// --- Simulation Parameters ---
-const GAMMA = 2.211e5; // Gyromagnetic ratio (m/A*s) - Can be adjusted for visual speed
-const ALPHA = 0.5;    // Increased Gilbert damping parameter (dimensionless)
-const EXCHANGE_STRENGTH = 1e-11; // Exchange stiffness (J/m) - Adjust for wave propagation
-const EXTERNAL_FIELD_STRENGTH = 5e6; // Increased strength of mouse field (A/m)
-const TIME_STEP_SCALE = 2e-10; // Increased simulation time step scale
-// ---------------------------
+// Removed constant parameter definitions
 
 interface SpinGridProps {
   gridSize?: number;
+  isFieldInverted?: boolean;
+  // Add parameter props
+  gamma?: number;
+  alpha?: number;
+  exchangeStrength?: number;
+  externalFieldStrength?: number;
+  timeStepScale?: number;
 }
 
 interface Spin {
@@ -24,30 +25,42 @@ interface Spin {
   neighbors: number[];
 }
 
+// Default values if props aren't provided (fallback)
+const DEFAULT_GAMMA = 5e5;
+const DEFAULT_ALPHA = 0.3;
+const DEFAULT_EXCHANGE_STRENGTH = 1.5e-10;
+const DEFAULT_EXTERNAL_FIELD_STRENGTH = 2e5;
+const DEFAULT_TIME_STEP_SCALE = 5e-10;
+
 const GRID_SIZE = 20;
-const SPACING = 0.5;
-const ARROW_LENGTH = SPACING * 0.8;
-const ARROW_HEAD_WIDTH = SPACING * 0.4;
-const ARROW_HEAD_LENGTH = SPACING * 0.3; // Adjusted head length
-const ARROW_SHAFT_LENGTH = ARROW_LENGTH - ARROW_HEAD_LENGTH;
-const ARROW_SHAFT_RADIUS = ARROW_HEAD_WIDTH * 0.15; // Thinner shaft
-const ARROW_RESOLUTION = 16; // Increased resolution for smoother cone
+const SPACING = 0.5; // Grid spacing
 
-// Create base geometries, centered around origin, pointing +Y initially
-const baseHeadGeometry = new THREE.ConeGeometry(ARROW_HEAD_WIDTH / 2, ARROW_HEAD_LENGTH, ARROW_RESOLUTION);
-baseHeadGeometry.translate(0, ARROW_SHAFT_LENGTH / 2, 0); // Position head on top of shaft
+// --- Fixed Arrow Dimensions ---
+const FIXED_ARROW_LENGTH = 0.4;
+const FIXED_ARROW_HEAD_LENGTH_RATIO = 0.3;
+const FIXED_ARROW_HEAD_WIDTH_RATIO = 0.4;
+const FIXED_ARROW_SHAFT_RADIUS_RATIO = 0.06;
+const FIXED_ARROW_HEAD_LENGTH = FIXED_ARROW_LENGTH * FIXED_ARROW_HEAD_LENGTH_RATIO;
+const FIXED_ARROW_HEAD_WIDTH = FIXED_ARROW_LENGTH * FIXED_ARROW_HEAD_WIDTH_RATIO;
+const FIXED_ARROW_SHAFT_LENGTH = FIXED_ARROW_LENGTH - FIXED_ARROW_HEAD_LENGTH;
+const FIXED_ARROW_SHAFT_RADIUS = FIXED_ARROW_LENGTH * FIXED_ARROW_SHAFT_RADIUS_RATIO;
+const ARROW_RESOLUTION = 16;
+// ---------------------------
 
-const baseShaftGeometry = new THREE.CylinderGeometry(ARROW_SHAFT_RADIUS, ARROW_SHAFT_RADIUS, ARROW_SHAFT_LENGTH, ARROW_RESOLUTION);
-baseShaftGeometry.translate(0, -ARROW_HEAD_LENGTH / 2, 0); // Position shaft below head
+// Create base geometries using FIXED dimensions, centered around origin, pointing +Y initially
+const baseHeadGeometry = new THREE.ConeGeometry(FIXED_ARROW_HEAD_WIDTH / 2, FIXED_ARROW_HEAD_LENGTH, ARROW_RESOLUTION);
+baseHeadGeometry.translate(0, FIXED_ARROW_SHAFT_LENGTH / 2, 0);
+
+const baseShaftGeometry = new THREE.CylinderGeometry(FIXED_ARROW_SHAFT_RADIUS, FIXED_ARROW_SHAFT_RADIUS, FIXED_ARROW_SHAFT_LENGTH, ARROW_RESOLUTION);
+baseShaftGeometry.translate(0, -FIXED_ARROW_HEAD_LENGTH / 2, 0);
 
 // Combine and rotate so default arrow points along +Z
 const baseArrowGroup = new THREE.Group();
 baseArrowGroup.add(new THREE.Mesh(baseHeadGeometry));
 baseArrowGroup.add(new THREE.Mesh(baseShaftGeometry));
 baseArrowGroup.rotateX(Math.PI / 2);
-baseArrowGroup.updateMatrixWorld(); // Ensure matrices are updated
+baseArrowGroup.updateMatrixWorld();
 
-// Extract geometries after rotation/grouping (may not be the most efficient)
 const finalHeadGeometry = baseHeadGeometry.clone().applyMatrix4(baseArrowGroup.matrixWorld);
 const finalShaftGeometry = baseShaftGeometry.clone().applyMatrix4(baseArrowGroup.matrixWorld);
 
@@ -65,13 +78,21 @@ const q = new THREE.Quaternion();
 const scale = new THREE.Vector3(1, 1, 1);
 // -----------------------------------------
 
-export default function SpinGrid({ gridSize = GRID_SIZE }: SpinGridProps) {
+export default function SpinGrid({ 
+  gridSize = GRID_SIZE,
+  isFieldInverted = false,
+  // Destructure parameters with defaults
+  gamma = DEFAULT_GAMMA,
+  alpha = DEFAULT_ALPHA,
+  exchangeStrength = DEFAULT_EXCHANGE_STRENGTH,
+  externalFieldStrength = DEFAULT_EXTERNAL_FIELD_STRENGTH,
+  timeStepScale = DEFAULT_TIME_STEP_SCALE
+}: SpinGridProps) {
   const headMeshRef = useRef<THREE.InstancedMesh>(null);
-  const shaftMeshRef = useRef<THREE.InstancedMesh>(null); // Ref for shaft mesh
+  const shaftMeshRef = useRef<THREE.InstancedMesh>(null);
   const { camera, raycaster, pointer } = useThree();
   const mousePosRef = useRef(new THREE.Vector3());
   const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
-
   const spinsRef = useRef<Spin[]>([]);
 
   useEffect(() => {
@@ -105,7 +126,6 @@ export default function SpinGrid({ gridSize = GRID_SIZE }: SpinGridProps) {
     }
     spinsRef.current = initialSpins;
 
-    // Set initial matrices for BOTH instanced meshes
     if (headMeshRef.current && shaftMeshRef.current) {
       initialSpins.forEach((spin, index) => {
         headMeshRef.current!.setMatrixAt(index, spin.matrix);
@@ -122,7 +142,7 @@ export default function SpinGrid({ gridSize = GRID_SIZE }: SpinGridProps) {
   }, [spinsRef.current]);
 
   useFrame((state, delta) => {
-    const dt = Math.min(delta, 0.03) * TIME_STEP_SCALE;
+    const dt = Math.min(delta, 0.03) * timeStepScale;
 
     raycaster.setFromCamera(pointer, camera);
     const target = new THREE.Vector3();
@@ -140,8 +160,13 @@ export default function SpinGrid({ gridSize = GRID_SIZE }: SpinGridProps) {
 
       H_ext.subVectors(spin.position, mousePosRef.current);
       const distSq = H_ext.lengthSq();
-      const strength = EXTERNAL_FIELD_STRENGTH / (1 + distSq * 5);
-      H_ext.normalize().multiplyScalar(-strength);
+      let strength = externalFieldStrength / (1 + distSq * 5);
+      
+      if (isFieldInverted) {
+        strength *= -1; 
+      }
+
+      H_ext.normalize().multiplyScalar(strength);
 
       H_exch.set(0, 0, 0);
       spin.neighbors.forEach(neighborIndex => {
@@ -149,16 +174,16 @@ export default function SpinGrid({ gridSize = GRID_SIZE }: SpinGridProps) {
            H_exch.add(prevDirectionsRef.current[neighborIndex]);
         }
       });
-      const exchangeScaling = EXCHANGE_STRENGTH * 1e6;
+      const exchangeScaling = exchangeStrength * 1e6;
       H_exch.multiplyScalar(exchangeScaling);
 
       H_eff.addVectors(H_ext, H_exch);
 
-      const gamma_eff = GAMMA / (1 + ALPHA * ALPHA);
+      const gamma_eff = gamma / (1 + alpha * alpha);
       term1.crossVectors(m, H_eff);
       term2.crossVectors(m, term1);
       term1.multiplyScalar(-gamma_eff);
-      term2.multiplyScalar(-gamma_eff * ALPHA);
+      term2.multiplyScalar(-gamma_eff * alpha);
       dmdt.addVectors(term1, term2);
 
       spin.direction.addScaledVector(dmdt, dt);
@@ -167,12 +192,10 @@ export default function SpinGrid({ gridSize = GRID_SIZE }: SpinGridProps) {
       q.setFromUnitVectors(initialUpDirection, spin.direction);
       spin.matrix.compose(spin.position, q, scale);
 
-      // Update matrix for BOTH meshes
       headMeshRef.current!.setMatrixAt(index, spin.matrix);
       shaftMeshRef.current!.setMatrixAt(index, spin.matrix);
     });
 
-    // Update BOTH instance matrices
     headMeshRef.current.instanceMatrix.needsUpdate = true;
     shaftMeshRef.current.instanceMatrix.needsUpdate = true;
   });
@@ -183,11 +206,11 @@ export default function SpinGrid({ gridSize = GRID_SIZE }: SpinGridProps) {
     <group>
       <instancedMesh
         ref={headMeshRef}
-        args={[finalHeadGeometry, material, gridSize * gridSize]} // Use final head geo
+        args={[finalHeadGeometry, material, gridSize * gridSize]}
       />
       <instancedMesh
         ref={shaftMeshRef}
-        args={[finalShaftGeometry, material, gridSize * gridSize]} // Use final shaft geo
+        args={[finalShaftGeometry, material, gridSize * gridSize]}
       />
     </group>
   );
